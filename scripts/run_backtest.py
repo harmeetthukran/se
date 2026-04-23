@@ -7,8 +7,15 @@ Examples:
     # Run a single strategy on a custom list:
     python scripts/run_backtest.py --strategy orb --symbols RELIANCE,HDFCBANK,TCS
 
-    # Save per-strategy summary to reports/:
+    # Save the usual summary to reports/:
     python scripts/run_backtest.py --top 30 --save
+
+    # Also attach news context to every trade and every day:
+    python scripts/run_backtest.py --top 30 --save --narrate
+
+The --narrate flag joins trades and daily returns against the local news
+store (populated by scripts/snapshot_news.py). Dates before you started
+snapshotting will honestly show "no news in store".
 """
 from __future__ import annotations
 
@@ -24,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from nse_bot.backtest import engine, metrics
 from nse_bot.backtest.costs import CostConfig
+from nse_bot.backtest.narrative import annotate_trades, daily_narrative
 from nse_bot.config import REPORTS_DIR, ensure_dirs, load_config
 from nse_bot.data import cache, universe
 from nse_bot.data.upstox_client import resample
@@ -42,7 +50,7 @@ def _load(sym: str, interval: str) -> pd.DataFrame:
     return cache.read(sym, interval)
 
 
-def _run_one(strategy_name: str, sym: str, capital: float) -> dict | None:
+def _run_one(strategy_name: str, sym: str, capital: float) -> tuple[dict, pd.Series, pd.DataFrame] | None:
     strat_cls = REGISTRY[strategy_name]
     strat = strat_cls()
     df = _load(sym, strat.interval)
@@ -60,7 +68,9 @@ def _run_one(strategy_name: str, sym: str, capital: float) -> dict | None:
     m = metrics.compute(eq, trades, periods_per_year=periods_per_year)
     row = m.to_dict()
     row.update({"strategy": strategy_name, "symbol": sym})
-    return row
+    if not trades.empty:
+        trades = trades.assign(strategy=strategy_name, symbol=sym)
+    return row, eq, trades
 
 
 def _pick_symbol_column(df) -> str:
@@ -75,7 +85,8 @@ def _pick_symbol_column(df) -> str:
 @click.option("--symbols", type=str, default="", help="Comma-separated trading symbols.")
 @click.option("--top", type=int, default=30, help="Take top-N from universe when no --symbols.")
 @click.option("--save/--no-save", default=False, help="Save CSVs under reports/.")
-def main(strategy: str, symbols: str, top: int, save: bool) -> None:
+@click.option("--narrate/--no-narrate", default=False, help="Attach news context to trades and daily returns.")
+def main(strategy: str, symbols: str, top: int, save: bool, narrate: bool) -> None:
     ensure_dirs()
     cfg = load_config()
 
@@ -92,11 +103,18 @@ def main(strategy: str, symbols: str, top: int, save: bool) -> None:
         raise SystemExit(f"Unknown strategies: {missing}. Available: {list(REGISTRY)}")
 
     rows: list[dict] = []
+    all_trades: list[pd.DataFrame] = []
+    equity_curves: dict[tuple[str, str], pd.Series] = {}
     for strat_name in strategies:
         for sym in tqdm(syms, desc=strat_name, unit="sym"):
-            row = _run_one(strat_name, sym, cfg.capital_inr)
-            if row:
-                rows.append(row)
+            result = _run_one(strat_name, sym, cfg.capital_inr)
+            if result is None:
+                continue
+            row, eq, trades = result
+            rows.append(row)
+            equity_curves[(strat_name, sym)] = eq
+            if not trades.empty:
+                all_trades.append(trades)
 
     if not rows:
         print("No results — did you run fetch_history.py first?")
@@ -125,12 +143,42 @@ def main(strategy: str, symbols: str, top: int, save: bool) -> None:
     print("\n=== Per-strategy summary ===")
     print(tabulate(summary, headers="keys", tablefmt="github"))
 
-    if save:
+    if save or narrate:
         out_dir = REPORTS_DIR
         out_dir.mkdir(parents=True, exist_ok=True)
+
+    if save:
         df.to_csv(out_dir / "backtest_per_symbol.csv", index=False)
         summary.to_csv(out_dir / "backtest_summary.csv")
-        print(f"\nSaved CSVs to {out_dir}")
+        print(f"\nSaved summary CSVs to {out_dir}")
+
+    if narrate:
+        trades_all = pd.concat(all_trades, ignore_index=True) if all_trades else pd.DataFrame()
+        annotated = annotate_trades(trades_all) if not trades_all.empty else trades_all
+        if not annotated.empty:
+            annotated.to_csv(out_dir / "trade_narratives.csv", index=False)
+            print(f"Saved annotated trades to {out_dir / 'trade_narratives.csv'} ({len(annotated)} rows)")
+
+        narratives = []
+        for (strat_name, sym), eq in equity_curves.items():
+            if eq.empty:
+                continue
+            n = daily_narrative(eq)
+            if not n.empty:
+                n.insert(0, "strategy", strat_name)
+                n.insert(1, "symbol", sym)
+                narratives.append(n)
+        if narratives:
+            daily_df = pd.concat(narratives, ignore_index=True)
+            daily_df.to_csv(out_dir / "daily_narratives.csv", index=False)
+            print(f"Saved per-day narratives to {out_dir / 'daily_narratives.csv'} ({len(daily_df)} rows)")
+
+            print("\n=== Sample trade narratives (top 10 by |return|) ===")
+            if not annotated.empty and "return_pct" in annotated.columns:
+                sample_cols = ["strategy", "symbol", "side", "entry_ts", "exit_ts", "return_pct", "entry_news"]
+                existing = [c for c in sample_cols if c in annotated.columns]
+                top = annotated.assign(_abs=annotated["return_pct"].abs()).sort_values("_abs", ascending=False).head(10)
+                print(tabulate(top[existing], headers="keys", tablefmt="github", showindex=False))
 
 
 if __name__ == "__main__":

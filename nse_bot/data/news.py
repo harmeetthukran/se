@@ -168,6 +168,28 @@ def fetch_nse_announcements(timeout: float = 15.0) -> list[NewsItem]:
     return items
 
 
+def snapshot(include_nse: bool = True) -> dict[str, int]:
+    """Fetch current RSS + NSE announcements and persist to the news store.
+
+    Intended to be run once per day (Windows Task Scheduler). Returns a dict
+    of {source: items_written_net_new}. Idempotent — duplicates are dropped
+    on (source, title, date).
+    """
+    from nse_bot.data import news_store  # local import to avoid cycle
+
+    rss_items = fetch_rss()
+    nse_items = fetch_nse_announcements() if include_nse else []
+
+    added_rss = news_store.write(rss_items)
+    added_nse = news_store.write(nse_items)
+    return {
+        "rss_fetched": len(rss_items),
+        "nse_fetched": len(nse_items),
+        "rss_new": added_rss,
+        "nse_new": added_nse,
+    }
+
+
 def score_for_symbols(items: list[NewsItem], symbols: list[str]) -> dict[str, dict]:
     """Aggregate sentiment per symbol by case-insensitive match in title/summary."""
     by_sym: dict[str, list[float]] = {s.upper(): [] for s in symbols}
