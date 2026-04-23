@@ -29,7 +29,7 @@ from nse_bot.backtest.costs import CostConfig, round_trip_cost
 
 @dataclass(frozen=True)
 class BacktestConfig:
-    initial_capital: float = 50_000.0
+    initial_capital: float = 100_000.0
     cost: CostConfig = CostConfig()
     intraday_squareoff: bool = False
     squareoff_hhmm: tuple[int, int] = (15, 15)

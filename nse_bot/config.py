@@ -35,7 +35,7 @@ def load_config() -> Config:
         api_secret=os.getenv("UPSTOX_API_SECRET", "").strip(),
         redirect_uri=os.getenv("UPSTOX_REDIRECT_URI", "http://localhost:5555/callback").strip(),
         access_token=os.getenv("UPSTOX_ACCESS_TOKEN", "").strip(),
-        capital_inr=float(os.getenv("CAPITAL_INR", "50000")),
+        capital_inr=float(os.getenv("CAPITAL_INR", "100000")),
     )
 
 
