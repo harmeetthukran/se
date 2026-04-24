@@ -34,6 +34,26 @@ class RiskConfig:
     max_drawdown_pct: float = 0.15        # halt when DD <= -15%%
     dd_resume_pct: float = 0.075          # resume when DD recovers above -7.5%%
 
+    # --- Advanced exits ---
+    # Trailing stop: ratchet stop up (down) as favorable price extends. Set to
+    # None to disable. When set, the initial stop is replaced by a trailing
+    # stop at `trailing_stop_atr_mult` × ATR below the highest-favorable price.
+    trailing_stop_atr_mult: float | None = None
+
+    # Time-based exit: close the position if it's still open after this many
+    # bars. None disables.
+    max_bars_in_trade: int | None = None
+
+    # Partial take-profit: when price first reaches `partial_tp_atr_mult`
+    # × ATR of favorable move, close `partial_tp_ratio` of the position and
+    # let the remainder ride. Both must be set to activate.
+    partial_tp_atr_mult: float | None = None
+    partial_tp_ratio: float | None = None
+
+    # After a partial TP fires, optionally move the stop to break-even
+    # (entry price). Reduces risk on the remainder.
+    move_stop_to_breakeven_after_partial: bool = True
+
 
 def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     h = df["high"].astype(float)

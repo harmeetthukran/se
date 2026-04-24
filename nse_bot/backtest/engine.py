@@ -95,20 +95,26 @@ def run(
     entry_i: int | None = None
     entry_px = 0.0
     qty = 0.0
+    initial_qty = 0.0  # for partial-TP bookkeeping
     stop_px = np.nan
     target_px = np.nan
+    best_favorable_px = np.nan  # highest high for longs / lowest low for shorts
+    partial_done = False
     current_pos = 0
     last_exit_bar = -1  # no re-entry on the same bar as a stop/target/squareoff
 
     trades: list[dict] = []
     pos_values = pos.values
 
-    def _close(exit_i: int, exit_px_override: float | None, reason: str) -> None:
-        nonlocal capital, entry_i, entry_px, qty, current_pos, stop_px, target_px, peak_equity, last_exit_bar
+    def _close(exit_i: int, exit_px_override: float | None, reason: str, partial_qty: float | None = None) -> None:
+        nonlocal capital, entry_i, entry_px, qty, current_pos, stop_px, target_px, peak_equity, last_exit_bar, best_favorable_px, partial_done, initial_qty
         exit_px = float(exit_px_override if exit_px_override is not None else close[exit_i])
-        gross = current_pos * (exit_px - entry_px) * qty
-        buy_val = entry_px * qty if current_pos > 0 else exit_px * qty
-        sell_val = exit_px * qty if current_pos > 0 else entry_px * qty
+        close_qty = float(partial_qty) if partial_qty is not None else qty
+        if close_qty <= 0:
+            return
+        gross = current_pos * (exit_px - entry_px) * close_qty
+        buy_val = entry_px * close_qty if current_pos > 0 else exit_px * close_qty
+        sell_val = exit_px * close_qty if current_pos > 0 else entry_px * close_qty
         cost = round_trip_cost(buy_val, sell_val, cfg.cost)
         net = gross - cost
         capital += net
@@ -120,7 +126,7 @@ def run(
                 "side": "LONG" if current_pos > 0 else "SHORT",
                 "entry_px": entry_px,
                 "exit_px": exit_px,
-                "qty": qty,
+                "qty": close_qty,
                 "gross_inr": gross,
                 "cost_inr": cost,
                 "pnl_inr": net,
@@ -128,19 +134,28 @@ def run(
                 "exit_reason": reason,
             }
         )
+        if partial_qty is not None and close_qty < qty:
+            qty -= close_qty
+            last_exit_bar = exit_i
+            return
         last_exit_bar = exit_i
         entry_i = None
         entry_px = 0.0
         qty = 0.0
+        initial_qty = 0.0
         current_pos = 0
         stop_px = np.nan
         target_px = np.nan
+        best_favorable_px = np.nan
+        partial_done = False
 
     def _open(i: int, direction: int) -> None:
-        nonlocal entry_i, entry_px, qty, current_pos, stop_px, target_px
+        nonlocal entry_i, entry_px, qty, initial_qty, current_pos, stop_px, target_px, best_favorable_px, partial_done
         entry_i = i
         entry_px = float(close[i])
         current_pos = direction
+        best_favorable_px = entry_px
+        partial_done = False
         if cfg.risk.enabled and not np.isnan(atr_vals[i]) and atr_vals[i] > 0:
             stop_px = entry_px - direction * cfg.risk.stop_atr_mult * atr_vals[i]
             target_px = entry_px + direction * cfg.risk.target_atr_mult * atr_vals[i]
@@ -151,21 +166,64 @@ def run(
                 cfg.risk.risk_per_trade_pct,
                 cfg.risk.max_position_pct,
             )
+            initial_qty = qty
         else:
             stop_px = np.nan
             target_px = np.nan
             qty = (capital * cfg.size_pct) / entry_px if entry_px > 0 else 0.0
 
     for i in range(1, len(data)):
-        # Intrabar stop/target check on the *existing* position before we look
-        # at the new signal for this bar.
+        # Update trailing stop / best-favorable price on the existing position.
         if current_pos != 0 and cfg.risk.enabled:
-            hit_stop = (current_pos > 0 and low[i] <= stop_px) or (current_pos < 0 and high[i] >= stop_px)
-            hit_target = (current_pos > 0 and high[i] >= target_px) or (current_pos < 0 and low[i] <= target_px)
-            if hit_stop:
-                _close(i, stop_px, "stop")
-            elif hit_target:
-                _close(i, target_px, "target")
+            # Advance best-favorable based on bar's high/low.
+            if current_pos > 0:
+                best_favorable_px = max(best_favorable_px, high[i])
+            else:
+                best_favorable_px = min(best_favorable_px, low[i])
+
+            # Partial TP first (at first touch of partial_tp_atr_mult × ATR in favor).
+            if (
+                not partial_done
+                and cfg.risk.partial_tp_atr_mult is not None
+                and cfg.risk.partial_tp_ratio is not None
+                and not np.isnan(atr_vals[i])
+            ):
+                partial_level = entry_px + current_pos * cfg.risk.partial_tp_atr_mult * atr_vals[i]
+                reached = (current_pos > 0 and high[i] >= partial_level) or (current_pos < 0 and low[i] <= partial_level)
+                if reached and initial_qty > 0:
+                    partial_qty = initial_qty * cfg.risk.partial_tp_ratio
+                    _close(i, partial_level, "partial_tp", partial_qty=min(partial_qty, qty))
+                    partial_done = True
+                    if cfg.risk.move_stop_to_breakeven_after_partial and current_pos != 0:
+                        stop_px = entry_px
+
+            # Trailing stop supersedes the static stop once engaged.
+            if cfg.risk.trailing_stop_atr_mult is not None and not np.isnan(atr_vals[i]) and atr_vals[i] > 0:
+                trail = best_favorable_px - current_pos * cfg.risk.trailing_stop_atr_mult * atr_vals[i]
+                if current_pos > 0:
+                    stop_px = max(stop_px, trail) if not np.isnan(stop_px) else trail
+                else:
+                    stop_px = min(stop_px, trail) if not np.isnan(stop_px) else trail
+
+            # Static stop / target check.
+            if current_pos != 0 and not np.isnan(stop_px):
+                hit_stop = (current_pos > 0 and low[i] <= stop_px) or (current_pos < 0 and high[i] >= stop_px)
+                if hit_stop:
+                    _close(i, stop_px, "stop")
+
+            if current_pos != 0 and not np.isnan(target_px):
+                hit_target = (current_pos > 0 and high[i] >= target_px) or (current_pos < 0 and low[i] <= target_px)
+                if hit_target:
+                    _close(i, target_px, "target")
+
+            # Time-based exit.
+            if (
+                current_pos != 0
+                and cfg.risk.max_bars_in_trade is not None
+                and entry_i is not None
+                and (i - entry_i) >= cfg.risk.max_bars_in_trade
+            ):
+                _close(i, None, "time_exit")
 
         p_now = int(pos_values[i])
 
