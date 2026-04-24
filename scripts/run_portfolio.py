@@ -82,6 +82,12 @@ def _pick_col(inst: pd.DataFrame, names) -> str | None:
 @click.option("--allocation", type=click.Choice(["equal", "risk"]), default="equal")
 @click.option("--sector-cap", type=int, default=0, help="0 = no cap.")
 @click.option(
+    "--ranking",
+    type=click.Choice(["fcfs", "momentum", "distance_sma", "signal_strength"]),
+    default="fcfs",
+    help="Rank concurrent candidates when more exist than open slots.",
+)
+@click.option(
     "--regime",
     type=click.Choice(["none", "self", "vol", "nifty", "self+nifty"]),
     default="none",
@@ -92,7 +98,7 @@ def _pick_col(inst: pd.DataFrame, names) -> str | None:
     default="off",
 )
 @click.option("--save/--no-save", default=False)
-def main(strategy, symbols, top, max_positions, allocation, sector_cap,
+def main(strategy, symbols, top, max_positions, allocation, sector_cap, ranking,
          regime, news_filter, save) -> None:
     ensure_dirs()
     cfg = load_config()
@@ -139,6 +145,7 @@ def main(strategy, symbols, top, max_positions, allocation, sector_cap,
         cost=CostConfig(segment="equity_intraday" if intraday else "equity_delivery"),
         risk=RiskConfig(),
         sector_cap=sector_cap if sector_cap > 0 else None,
+        ranking=ranking,
     )
 
     eq, trades = run_portfolio(per_symbol, pcfg, sectors_map or None)

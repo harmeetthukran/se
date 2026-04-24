@@ -22,7 +22,7 @@ Limitations (honest):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, Literal
+from typing import Callable, Iterable, Literal
 
 import numpy as np
 import pandas as pd
@@ -31,6 +31,43 @@ from nse_bot.backtest.costs import CostConfig, round_trip_cost
 from nse_bot.backtest.risk import RiskConfig, atr, size_from_risk
 
 Allocation = Literal["equal", "risk"]
+RankMethod = Literal["fcfs", "momentum", "distance_sma", "signal_strength", "custom"]
+Ranker = Callable[[str, pd.DataFrame, pd.Series, int], float]
+# Ranker: (symbol, per-symbol df up to current bar, signal up to current bar, current_bar_index) -> score
+
+
+def _rank_momentum(sym: str, df: pd.DataFrame, sig: pd.Series, i: int, lookback: int = 20) -> float:
+    """20-bar return of the symbol at bar i."""
+    if i - lookback < 0:
+        return 0.0
+    c0 = float(df["close"].iloc[i - lookback])
+    c1 = float(df["close"].iloc[i])
+    return (c1 / c0 - 1.0) if c0 > 0 else 0.0
+
+
+def _rank_distance_sma(sym: str, df: pd.DataFrame, sig: pd.Series, i: int, period: int = 50) -> float:
+    """% distance of close from its N-SMA. Higher = stronger uptrend."""
+    if i < period:
+        return 0.0
+    close = df["close"].iloc[: i + 1]
+    sma = close.iloc[-period:].mean()
+    if sma <= 0:
+        return 0.0
+    return float((close.iloc[-1] - sma) / sma)
+
+
+def _rank_signal_strength(sym: str, df: pd.DataFrame, sig: pd.Series, i: int) -> float:
+    """Consecutive bars the signal has been non-zero (staying-power)."""
+    score = 0.0
+    cur = int(sig.iloc[i]) if i < len(sig) else 0
+    if cur == 0:
+        return 0.0
+    for j in range(i, -1, -1):
+        if int(sig.iloc[j]) == cur:
+            score += 1
+        else:
+            break
+    return score
 
 
 @dataclass
@@ -41,6 +78,15 @@ class PortfolioConfig:
     cost: CostConfig = field(default_factory=lambda: CostConfig(segment="equity_delivery"))
     risk: RiskConfig = field(default_factory=RiskConfig)
     sector_cap: int | None = None  # max concurrent positions per sector
+    ranking: RankMethod = "fcfs"
+    custom_ranker: Ranker | None = None
+
+
+_RANKERS: dict[str, Ranker] = {
+    "momentum": _rank_momentum,
+    "distance_sma": _rank_distance_sma,
+    "signal_strength": _rank_signal_strength,
+}
 
 
 @dataclass
@@ -94,6 +140,18 @@ def run_portfolio(
     timeline = sorted(all_bars["ts"].unique())
 
     by_ts_sym = all_bars.set_index(["ts", "symbol"])
+
+    # Per-symbol frames + signals, keyed for quick ranker lookup.
+    per_sym_df: dict[str, pd.DataFrame] = {sym: df.reset_index(drop=True) for sym, (df, _) in per_symbol.items()}
+    per_sym_sig: dict[str, pd.Series] = {
+        sym: sig.reset_index(drop=True).fillna(0).astype(int).clip(-1, 1)
+        for sym, (_, sig) in per_symbol.items()
+    }
+    per_sym_ts_to_idx: dict[str, dict] = {
+        sym: {t: i for i, t in enumerate(per_sym_df[sym]["ts"].tolist())}
+        for sym in per_sym_df
+    }
+    ranker = cfg.custom_ranker if cfg.ranking == "custom" else _RANKERS.get(cfg.ranking)
 
     capital = cfg.initial_capital
     positions: dict[str, _Position] = {}
@@ -155,6 +213,23 @@ def run_portfolio(
             if desired == 0:
                 continue
             candidates.append((sym, row, desired))
+
+        # Rank candidates (higher score first). For short candidates the sign is
+        # flipped so "distance above SMA" etc. work directionally.
+        if ranker is not None and candidates:
+            scored = []
+            for sym, row, desired in candidates:
+                idx = per_sym_ts_to_idx.get(sym, {}).get(t)
+                if idx is None:
+                    scored.append((0.0, sym, row, desired))
+                    continue
+                try:
+                    raw = float(ranker(sym, per_sym_df[sym], per_sym_sig[sym], idx))
+                except Exception:
+                    raw = 0.0
+                scored.append((raw * desired, sym, row, desired))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            candidates = [(sym, row, desired) for _, sym, row, desired in scored]
 
         for sym, row, desired in candidates:
             if len(positions) >= cfg.max_positions:
