@@ -135,14 +135,57 @@ def _parse_http_date(s: str) -> datetime | None:
 
 
 def fetch_nse_announcements(timeout: float = 15.0) -> list[NewsItem]:
-    """NSE's corporate announcements feed. Requires a cookie-warmed session.
+    """NSE's corporate announcements feed (current). Cookie-warmed session.
 
     On failure (NSE frequently 401s clients from outside India), returns [].
     """
+    return _fetch_nse_announcements_range(None, None, timeout=timeout)
+
+
+def fetch_nse_announcements_range(
+    from_date: "date",
+    to_date: "date",
+    *,
+    chunk_days: int = 30,
+    timeout: float = 20.0,
+    pause_s: float = 0.5,
+) -> list[NewsItem]:
+    """Backfill historical NSE corporate announcements over [from_date, to_date].
+
+    NSE caps each request at ~30 days; we chunk transparently. Same anti-bot
+    headers and cookie-warm as the live fetcher.
+    """
+    import time
+    from datetime import timedelta
+
+    items: list[NewsItem] = []
+    cur = from_date
+    while cur <= to_date:
+        end = min(to_date, cur + timedelta(days=chunk_days - 1))
+        items.extend(_fetch_nse_announcements_range(cur, end, timeout=timeout))
+        cur = end + timedelta(days=1)
+        time.sleep(pause_s)
+    return items
+
+
+def _fetch_nse_announcements_range(
+    from_date: "date | None",
+    to_date: "date | None",
+    *,
+    timeout: float = 15.0,
+) -> list[NewsItem]:
+    """Internal: one request to the announcements endpoint, optionally date-bounded."""
+    url = NSE_ANNOUNCEMENTS_URL
+    if from_date is not None and to_date is not None:
+        url = (
+            f"{NSE_ANNOUNCEMENTS_URL}"
+            f"&from_date={from_date.strftime('%d-%m-%Y')}"
+            f"&to_date={to_date.strftime('%d-%m-%Y')}"
+        )
     try:
         with httpx.Client(timeout=timeout, headers=_NSE_HEADERS) as c:
             c.get("https://www.nseindia.com", timeout=timeout)
-            r = c.get(NSE_ANNOUNCEMENTS_URL, timeout=timeout)
+            r = c.get(url, timeout=timeout)
             r.raise_for_status()
             rows = r.json() or []
     except Exception:
