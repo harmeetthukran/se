@@ -32,12 +32,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from nse_bot.backtest import engine, metrics
 from nse_bot.backtest.costs import CostConfig
 from nse_bot.backtest.narrative import annotate_trades, daily_narrative
+from nse_bot.backtest.regime import apply_mask, nifty_regime, trend_above_sma, volatility_floor
 from nse_bot.config import REPORTS_DIR, ensure_dirs, load_config
 from nse_bot.data import cache, universe
 from nse_bot.data.upstox_client import resample
 from nse_bot.strategies import REGISTRY
 
 INTRADAY_INTERVALS = {"1minute", "5minute", "15minute", "30minute"}
+NIFTY_SYMBOLS = ("NIFTY 50", "NIFTY50", "NIFTY")
 
 
 def _load(sym: str, interval: str) -> pd.DataFrame:
@@ -50,20 +52,54 @@ def _load(sym: str, interval: str) -> pd.DataFrame:
     return cache.read(sym, interval)
 
 
-def _run_one(strategy_name: str, sym: str, capital: float) -> tuple[dict, pd.Series, pd.DataFrame] | None:
+def _nifty_daily() -> pd.DataFrame:
+    for s in NIFTY_SYMBOLS:
+        df = cache.read(s, "day")
+        if not df.empty:
+            return df
+    return pd.DataFrame()
+
+
+def _apply_regime(signal: pd.Series, df: pd.DataFrame, regime: str, nifty_df: pd.DataFrame) -> pd.Series:
+    if regime == "none":
+        return signal
+    if regime == "self":
+        return apply_mask(signal, trend_above_sma(df, period=200))
+    if regime == "vol":
+        return apply_mask(signal, volatility_floor(df, atr_period=14, min_atr_pct=0.005))
+    if regime == "nifty":
+        if nifty_df.empty:
+            return signal
+        return apply_mask(signal, nifty_regime(df["ts"], nifty_df, period=200))
+    if regime == "self+nifty":
+        sig = signal
+        if not nifty_df.empty:
+            sig = apply_mask(sig, nifty_regime(df["ts"], nifty_df, period=200))
+        return apply_mask(sig, trend_above_sma(df, period=200))
+    return signal
+
+
+def _run_one(
+    strategy_name: str,
+    sym: str,
+    capital: float,
+    regime: str,
+    nifty_df: pd.DataFrame,
+) -> tuple[dict, pd.Series, pd.DataFrame] | None:
     strat_cls = REGISTRY[strategy_name]
     strat = strat_cls()
     df = _load(sym, strat.interval)
     if df.empty or len(df) < 50:
         return None
     result = strat.generate(df)
+    signal = _apply_regime(result.signal, df, regime, nifty_df)
     segment = "equity_intraday" if result.intraday else "equity_delivery"
     cfg = engine.BacktestConfig(
         initial_capital=capital,
         cost=CostConfig(segment=segment),
         intraday_squareoff=result.intraday,
     )
-    eq, trades = engine.run(df, result.signal, cfg)
+    eq, trades = engine.run(df, signal, cfg)
     periods_per_year = 252 * 375 if strat.interval in INTRADAY_INTERVALS else 252
     m = metrics.compute(eq, trades, periods_per_year=periods_per_year)
     row = m.to_dict()
@@ -86,7 +122,13 @@ def _pick_symbol_column(df) -> str:
 @click.option("--top", type=int, default=30, help="Take top-N from universe when no --symbols.")
 @click.option("--save/--no-save", default=False, help="Save CSVs under reports/.")
 @click.option("--narrate/--no-narrate", default=False, help="Attach news context to trades and daily returns.")
-def main(strategy: str, symbols: str, top: int, save: bool, narrate: bool) -> None:
+@click.option(
+    "--regime",
+    type=click.Choice(["none", "self", "vol", "nifty", "self+nifty"]),
+    default="none",
+    help="Regime gate: self=symbol 200-SMA, vol=ATR floor, nifty=Nifty 200-SMA, self+nifty=both.",
+)
+def main(strategy: str, symbols: str, top: int, save: bool, narrate: bool, regime: str) -> None:
     ensure_dirs()
     cfg = load_config()
 
@@ -102,12 +144,16 @@ def main(strategy: str, symbols: str, top: int, save: bool, narrate: bool) -> No
     if missing:
         raise SystemExit(f"Unknown strategies: {missing}. Available: {list(REGISTRY)}")
 
+    nifty_df = _nifty_daily() if regime in ("nifty", "self+nifty") else pd.DataFrame()
+    if regime in ("nifty", "self+nifty") and nifty_df.empty:
+        print("Regime=nifty requested but no NIFTY daily candles in cache; falling back to per-symbol gate.")
+
     rows: list[dict] = []
     all_trades: list[pd.DataFrame] = []
     equity_curves: dict[tuple[str, str], pd.Series] = {}
     for strat_name in strategies:
         for sym in tqdm(syms, desc=strat_name, unit="sym"):
-            result = _run_one(strat_name, sym, cfg.capital_inr)
+            result = _run_one(strat_name, sym, cfg.capital_inr, regime, nifty_df)
             if result is None:
                 continue
             row, eq, trades = result
