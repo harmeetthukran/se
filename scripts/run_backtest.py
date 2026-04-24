@@ -34,6 +34,7 @@ from nse_bot.backtest.costs import CostConfig
 from nse_bot.backtest.narrative import annotate_trades, daily_narrative
 from nse_bot.backtest.news_filter import apply_news_filter
 from nse_bot.backtest.regime import apply_mask, nifty_regime, trend_above_sma, volatility_floor
+from nse_bot.data.events import skip_around_events
 from nse_bot.config import REPORTS_DIR, ensure_dirs, load_config
 from nse_bot.data import cache, universe
 from nse_bot.data.upstox_client import resample
@@ -87,6 +88,7 @@ def _run_one(
     regime: str,
     nifty_df: pd.DataFrame,
     news_filter: str,
+    skip_events_window: int,
 ) -> tuple[dict, pd.Series, pd.DataFrame] | None:
     strat_cls = REGISTRY[strategy_name]
     strat = strat_cls()
@@ -97,6 +99,8 @@ def _run_one(
     signal = _apply_regime(result.signal, df, regime, nifty_df)
     if news_filter != "off":
         signal = apply_news_filter(signal, df["ts"].reset_index(drop=True), sym, policy=news_filter)
+    if skip_events_window > 0:
+        signal = skip_around_events(signal, df["ts"].reset_index(drop=True), sym, window_days=skip_events_window)
     segment = "equity_intraday" if result.intraday else "equity_delivery"
     cfg = engine.BacktestConfig(
         initial_capital=capital,
@@ -138,7 +142,14 @@ def _pick_symbol_column(df) -> str:
     default="off",
     help="Mask signals by stored news sentiment.",
 )
-def main(strategy: str, symbols: str, top: int, save: bool, narrate: bool, regime: str, news_filter: str) -> None:
+@click.option(
+    "--skip-events",
+    type=int,
+    default=0,
+    help="Zero signals on ±N days of any corporate action / earnings. 0=disabled.",
+)
+def main(strategy: str, symbols: str, top: int, save: bool, narrate: bool, regime: str,
+         news_filter: str, skip_events: int) -> None:
     ensure_dirs()
     cfg = load_config()
 
@@ -163,7 +174,7 @@ def main(strategy: str, symbols: str, top: int, save: bool, narrate: bool, regim
     equity_curves: dict[tuple[str, str], pd.Series] = {}
     for strat_name in strategies:
         for sym in tqdm(syms, desc=strat_name, unit="sym"):
-            result = _run_one(strat_name, sym, cfg.capital_inr, regime, nifty_df, news_filter)
+            result = _run_one(strat_name, sym, cfg.capital_inr, regime, nifty_df, news_filter, skip_events)
             if result is None:
                 continue
             row, eq, trades = result
