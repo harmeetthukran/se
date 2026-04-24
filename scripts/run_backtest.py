@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from nse_bot.backtest import engine, metrics
 from nse_bot.backtest.costs import CostConfig
 from nse_bot.backtest.narrative import annotate_trades, daily_narrative
+from nse_bot.backtest.news_filter import apply_news_filter
 from nse_bot.backtest.regime import apply_mask, nifty_regime, trend_above_sma, volatility_floor
 from nse_bot.config import REPORTS_DIR, ensure_dirs, load_config
 from nse_bot.data import cache, universe
@@ -85,6 +86,7 @@ def _run_one(
     capital: float,
     regime: str,
     nifty_df: pd.DataFrame,
+    news_filter: str,
 ) -> tuple[dict, pd.Series, pd.DataFrame] | None:
     strat_cls = REGISTRY[strategy_name]
     strat = strat_cls()
@@ -93,6 +95,8 @@ def _run_one(
         return None
     result = strat.generate(df)
     signal = _apply_regime(result.signal, df, regime, nifty_df)
+    if news_filter != "off":
+        signal = apply_news_filter(signal, df["ts"].reset_index(drop=True), sym, policy=news_filter)
     segment = "equity_intraday" if result.intraday else "equity_delivery"
     cfg = engine.BacktestConfig(
         initial_capital=capital,
@@ -128,7 +132,13 @@ def _pick_symbol_column(df) -> str:
     default="none",
     help="Regime gate: self=symbol 200-SMA, vol=ATR floor, nifty=Nifty 200-SMA, self+nifty=both.",
 )
-def main(strategy: str, symbols: str, top: int, save: bool, narrate: bool, regime: str) -> None:
+@click.option(
+    "--news-filter",
+    type=click.Choice(["off", "require_confirmation", "block_contradiction"]),
+    default="off",
+    help="Mask signals by stored news sentiment.",
+)
+def main(strategy: str, symbols: str, top: int, save: bool, narrate: bool, regime: str, news_filter: str) -> None:
     ensure_dirs()
     cfg = load_config()
 
@@ -153,7 +163,7 @@ def main(strategy: str, symbols: str, top: int, save: bool, narrate: bool, regim
     equity_curves: dict[tuple[str, str], pd.Series] = {}
     for strat_name in strategies:
         for sym in tqdm(syms, desc=strat_name, unit="sym"):
-            result = _run_one(strat_name, sym, cfg.capital_inr, regime, nifty_df)
+            result = _run_one(strat_name, sym, cfg.capital_inr, regime, nifty_df, news_filter)
             if result is None:
                 continue
             row, eq, trades = result
