@@ -26,6 +26,10 @@ class VWAPRevertStrategy(Strategy):
         self.k = k
         self.lookback = lookback
 
+    @classmethod
+    def param_grid(cls) -> dict[str, list]:
+        return {"k": [1.5, 2.0, 2.5, 3.0], "lookback": [10, 20, 40]}
+
     def generate(self, df: pd.DataFrame) -> StrategyResult:
         if df.empty:
             return StrategyResult(signal=pd.Series(dtype=int), intraday=True)

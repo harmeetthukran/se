@@ -20,3 +20,11 @@ class Strategy(ABC):
     @abstractmethod
     def generate(self, df: pd.DataFrame) -> StrategyResult:
         """Produce a signal series aligned to df (OHLCV with ts column)."""
+
+    @classmethod
+    def param_grid(cls) -> dict[str, list]:
+        """Return the default parameter grid for walk-forward tuning.
+
+        Override in subclasses. Empty grid = no tuning (fixed params).
+        """
+        return {}

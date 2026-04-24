@@ -25,6 +25,14 @@ class DailyMomentumStrategy(Strategy):
         self.slow = slow
         self.trend = trend
 
+    @classmethod
+    def param_grid(cls) -> dict[str, list]:
+        return {
+            "fast": [10, 20, 30],
+            "slow": [50, 100],
+            "trend": [150, 200],
+        }
+
     def generate(self, df: pd.DataFrame) -> StrategyResult:
         if df.empty:
             return StrategyResult(signal=pd.Series(dtype=int), intraday=False)

@@ -26,6 +26,10 @@ class ORBStrategy(Strategy):
     def __init__(self, or_minutes: int = 15) -> None:
         self.or_minutes = or_minutes
 
+    @classmethod
+    def param_grid(cls) -> dict[str, list]:
+        return {"or_minutes": [15, 30, 45, 60]}
+
     def generate(self, df: pd.DataFrame) -> StrategyResult:
         if df.empty:
             return StrategyResult(signal=pd.Series(dtype=int), intraday=True)
