@@ -326,3 +326,40 @@ def nearest_expiry(
         return None
     expiries = sorted(sub["expiry"].dropna().unique())
     return expiries[0] if expiries else None
+
+
+def underlying_price(symbol: str, as_of: date) -> float | None:
+    """Approximate spot price from the nearest-expiry futures close.
+
+    For Indian index/stock futures the basis is small near expiry and
+    converges to zero at expiry, so the nearest-expiry futures close is a
+    standard proxy when bhavcopy doesn't carry the spot directly.
+    """
+    df = load_day(as_of)
+    if df.empty:
+        return None
+    fut = df.loc[
+        (df["symbol"].astype(str).str.upper() == symbol.upper())
+        & df["instrument_type"].astype(str).str.upper().isin(["FUTIDX", "FUTSTK", "STF", "IDF"])
+        & (df["expiry"] >= as_of)
+    ]
+    if fut.empty:
+        return None
+    fut = fut.sort_values("expiry")
+    px = fut.iloc[0]["close"]
+    try:
+        return float(px) if pd.notna(px) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def expiries_for(symbol: str, as_of: date) -> list[date]:
+    """All option expiries listed for `symbol` on `as_of`."""
+    df = load_day(as_of)
+    if df.empty:
+        return []
+    sub = df.loc[
+        (df["symbol"].astype(str).str.upper() == symbol.upper())
+        & df["instrument_type"].astype(str).str.upper().isin(["OPTIDX", "OPTSTK", "STO", "IDO"])
+    ]
+    return sorted({d for d in sub["expiry"].dropna().unique() if d >= as_of})
