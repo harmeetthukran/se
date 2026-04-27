@@ -50,9 +50,15 @@ def _parse_date(s: str) -> date:
 @click.option("--stop-pct", type=float, default=-0.5, help="Stop at -N×premium. 0=disable.")
 @click.option("--width-pct", type=float, default=0.01, help="Spread strategies only.")
 @click.option("--max-trade-pct", type=float, default=0.5, help="Max premium per trade as fraction of capital.")
+@click.option("--max-iv-rank", type=float, default=-1.0,
+              help="Only enter when ATM IV rank <= this (debit strategies). -1=disabled.")
+@click.option("--min-iv-rank", type=float, default=-1.0,
+              help="Only enter when ATM IV rank >= this. -1=disabled.")
+@click.option("--iv-lookback", type=int, default=180)
 @click.option("--save/--no-save", default=False)
 def main(strategy, symbol, years, from_date, to_date, lots, lot_size, min_dte, max_dte,
-         entry_freq_days, target_pct, stop_pct, width_pct, max_trade_pct, save):
+         entry_freq_days, target_pct, stop_pct, width_pct, max_trade_pct,
+         max_iv_rank, min_iv_rank, iv_lookback, save):
     ensure_dirs()
     cfg = load_config()
 
@@ -74,6 +80,9 @@ def main(strategy, symbol, years, from_date, to_date, lots, lot_size, min_dte, m
         entry_freq_days=entry_freq_days,
         target_pnl_pct_of_premium=target_pct if target_pct != 0 else None,
         stop_pnl_pct_of_premium=stop_pct if stop_pct != 0 else None,
+        max_iv_rank=max_iv_rank if 0 <= max_iv_rank <= 1 else None,
+        min_iv_rank=min_iv_rank if 0 <= min_iv_rank <= 1 else None,
+        iv_lookback_days=iv_lookback,
     )
     strat_cls = REGISTRY[strategy]
     if strategy in ("bull_call_spread", "bear_put_spread"):
