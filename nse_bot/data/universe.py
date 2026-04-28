@@ -56,29 +56,50 @@ def _is_fresh_today() -> bool:
         return False
 
 
+def _isin_from_key(instrument_key: str) -> str:
+    """instrument_key looks like 'NSE_EQ|INE002A01018'. Return the ISIN portion."""
+    s = str(instrument_key)
+    return s.split("|", 1)[1] if "|" in s else s
+
+
 def nse_equity(df: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Return NSE cash-market equity rows only."""
+    """Return NSE cash-market equity rows only.
+
+    Upstox's `exchange` column on the instruments dump uses values like
+    `NSE_EQ` / `BSE_EQ` (not `NSE`). The `instrument_type` column tags every
+    NSE_EQ row as `EQUITY` even for government securities, SDLs, and T-bills.
+    Real equities have ISINs that start with `INE`; bonds/SDLs/T-bills start
+    with `IN0`/`IN1`/`IN2`/etc.
+    """
     df = df if df is not None else load_instruments()
-    seg = df.get("segment")
     ex = df.get("exchange")
     instr_type = df.get("instrument_type")
+    seg = df.get("segment")
+    key = df.get("instrument_key")
+
     mask = pd.Series(True, index=df.index)
-    if seg is not None:
-        mask &= seg.astype(str).str.upper().eq("NSE_EQ")
     if ex is not None:
-        mask &= ex.astype(str).str.upper().eq("NSE")
+        mask &= ex.astype(str).str.upper().eq("NSE_EQ")
+    elif seg is not None:
+        mask &= seg.astype(str).str.upper().eq("NSE_EQ")
     if instr_type is not None:
         mask &= instr_type.astype(str).str.upper().isin(["EQ", "EQUITY"])
+    if key is not None:
+        # Keep only real equities — ISIN starts with INE.
+        mask &= key.astype(str).map(_isin_from_key).str.upper().str.startswith("INE")
     return df.loc[mask].reset_index(drop=True)
 
 
 def nse_fno(df: pd.DataFrame | None = None) -> pd.DataFrame:
     """Return NSE futures & options rows."""
     df = df if df is not None else load_instruments()
+    ex = df.get("exchange")
     seg = df.get("segment")
-    if seg is None:
-        return df.head(0)
-    return df.loc[seg.astype(str).str.upper().eq("NSE_FO")].reset_index(drop=True)
+    if ex is not None:
+        return df.loc[ex.astype(str).str.upper().eq("NSE_FO")].reset_index(drop=True)
+    if seg is not None:
+        return df.loc[seg.astype(str).str.upper().eq("NSE_FO")].reset_index(drop=True)
+    return df.head(0)
 
 
 def find_symbol(symbol: str, df: pd.DataFrame | None = None) -> pd.Series | None:
