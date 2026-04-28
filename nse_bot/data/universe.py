@@ -89,9 +89,14 @@ NIFTY_NEXT_50_PARTIAL = [
 
 
 def expand_universe_keyword(symbol_or_keyword: str) -> list[str] | None:
-    """If symbol_or_keyword is a magic universe alias, return the expanded list."""
-    s = symbol_or_keyword.strip().upper().replace("_", "").replace("-", "").replace(" ", "")
-    if s in ("NIFTY50", "NIFTY", "N50"):
+    """If symbol_or_keyword is a magic universe alias, return the expanded list.
+
+    Only matches the compact, space-free forms — `nifty50`, `NIFTY50`, `N50` —
+    so a literal `"Nifty 50"` (the index trading symbol) still resolves to the
+    actual index in the instruments dump.
+    """
+    s = symbol_or_keyword.strip().upper().replace("_", "").replace("-", "")
+    if s in ("NIFTY50", "N50"):
         return list(NIFTY_50)
     if s in ("NIFTY100", "N100"):
         return list(NIFTY_50) + list(NIFTY_NEXT_50_PARTIAL)
