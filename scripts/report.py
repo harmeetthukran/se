@@ -77,6 +77,11 @@ def main(strategy: str, symbol: str, interval: str, mc_sims: int, benchmark: str
     out_dir = REPORTS_DIR / f"{strategy}_{symbol}_{interval}".replace(" ", "_")
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Persist raw equity + trades so other tools (test_edge.py, ensemble) can read them.
+    eq.to_frame("equity").to_csv(out_dir / "equity.csv", index_label="ts")
+    if not trades.empty:
+        trades.to_csv(out_dir / "trades.csv", index=False)
+
     bench_eq = None
     if benchmark:
         b_df = cache.read(benchmark, "day")
