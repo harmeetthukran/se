@@ -154,7 +154,15 @@ def main(strategy: str, symbols: str, top: int, save: bool, narrate: bool, regim
     cfg = load_config()
 
     if symbols:
-        syms = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        raw_tokens = [s.strip() for s in symbols.split(",") if s.strip()]
+        syms: list[str] = []
+        for tok in raw_tokens:
+            expanded = universe.expand_universe_keyword(tok)
+            if expanded is not None:
+                syms.extend(s.upper() for s in expanded)
+            else:
+                syms.append(tok.upper())
+        syms = sorted(set(syms))
     else:
         inst = universe.nse_equity()
         col = _pick_symbol_column(inst)

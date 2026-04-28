@@ -56,6 +56,48 @@ def _is_fresh_today() -> bool:
         return False
 
 
+# Curated Nifty 50 constituents (late 2024). Used by `--symbols nifty50` shortcuts.
+# Constituents change quarterly; this list is "good enough" — minor deviations
+# don't change backtest conclusions on a 5-year window.
+NIFTY_50 = [
+    "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK",
+    "BAJAJ-AUTO", "BAJAJFINSV", "BAJFINANCE", "BEL", "BHARTIARTL",
+    "BPCL", "CIPLA", "COALINDIA", "DRREDDY", "EICHERMOT",
+    "GRASIM", "HCLTECH", "HDFCBANK", "HDFCLIFE", "HEROMOTOCO",
+    "HINDALCO", "HINDUNILVR", "ICICIBANK", "INDUSINDBK", "INFY",
+    "ITC", "JSWSTEEL", "KOTAKBANK", "LT", "M&M",
+    "MARUTI", "NESTLEIND", "NTPC", "ONGC", "POWERGRID",
+    "RELIANCE", "SBILIFE", "SBIN", "SHRIRAMFIN", "SUNPHARMA",
+    "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TCS", "TECHM",
+    "TITAN", "TRENT", "ULTRACEMCO", "WIPRO", "ZOMATO",
+]
+
+
+# Compact list of additional very-liquid names beyond Nifty 50.
+NIFTY_NEXT_50_PARTIAL = [
+    "DLF", "GAIL", "GODREJCP", "HAVELLS", "HINDPETRO",
+    "ICICIPRULI", "IOC", "PIDILITIND", "PNB", "SIEMENS",
+    "VEDL", "AMBUJACEM", "DABUR", "DMART", "INDIGO",
+    "IRCTC", "MUTHOOTFIN", "NAUKRI", "PFC", "SBICARD",
+    "SRF", "TVSMOTOR", "UPL", "ZYDUSLIFE", "BERGEPAINT",
+    "BIOCON", "CHOLAFIN", "COLPAL", "GODREJPROP", "HAL",
+    "ICICIGI", "IDEA", "JINDALSTEL", "LICI", "LUPIN",
+    "MOTHERSON", "MPHASIS", "PEL", "PIIND", "RECLTD",
+    "TATAPOWER", "TORNTPHARM", "TVSMOTOR", "ABCAPITAL", "BANDHANBNK",
+    "BANKBARODA", "GMRINFRA", "INDHOTEL", "IRFC", "PAYTM",
+]
+
+
+def expand_universe_keyword(symbol_or_keyword: str) -> list[str] | None:
+    """If symbol_or_keyword is a magic universe alias, return the expanded list."""
+    s = symbol_or_keyword.strip().upper().replace("_", "").replace("-", "").replace(" ", "")
+    if s in ("NIFTY50", "NIFTY", "N50"):
+        return list(NIFTY_50)
+    if s in ("NIFTY100", "N100"):
+        return list(NIFTY_50) + list(NIFTY_NEXT_50_PARTIAL)
+    return None
+
+
 def _isin_from_key(instrument_key: str) -> str:
     """instrument_key looks like 'NSE_EQ|INE002A01018'. Return the ISIN portion."""
     s = str(instrument_key)

@@ -63,7 +63,15 @@ def main(interval: str, years: float, symbols: str, top: int, resume: bool) -> N
         full = universe.load_instruments()
         sym_col = _pick_symbol_column(full)
         key_col = _pick_key_column(full)
-        wanted = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        raw_tokens = [s.strip() for s in symbols.split(",") if s.strip()]
+        wanted: list[str] = []
+        for tok in raw_tokens:
+            expanded = universe.expand_universe_keyword(tok)
+            if expanded is not None:
+                wanted.extend(s.upper() for s in expanded)
+            else:
+                wanted.append(tok.upper())
+        wanted = sorted(set(wanted))
         sub = full.loc[full[sym_col].astype(str).str.upper().isin(wanted)].copy()
         # Restrict to NSE-side instruments to avoid double-fetching from BSE.
         if "exchange" in sub.columns:
