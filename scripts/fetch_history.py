@@ -57,14 +57,26 @@ def main(interval: str, years: float, symbols: str, top: int, resume: bool) -> N
     if not cfg.access_token:
         raise SystemExit("No UPSTOX_ACCESS_TOKEN. Run `python scripts/auth.py` first.")
 
-    inst = universe.nse_equity()
-    sym_col = _pick_symbol_column(inst)
-    key_col = _pick_key_column(inst)
-
     if symbols:
+        # Explicit list — search the FULL instruments dump so indices,
+        # F&O contracts, etc. resolve, not just NSE_EQ equities.
+        full = universe.load_instruments()
+        sym_col = _pick_symbol_column(full)
+        key_col = _pick_key_column(full)
         wanted = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-        sub = inst.loc[inst[sym_col].astype(str).str.upper().isin(wanted)].copy()
+        sub = full.loc[full[sym_col].astype(str).str.upper().isin(wanted)].copy()
+        # Restrict to NSE-side instruments to avoid double-fetching from BSE.
+        if "exchange" in sub.columns:
+            sub = sub.loc[sub["exchange"].astype(str).str.upper().str.startswith("NSE_")]
+        # If multiple matches per symbol (e.g. NSE_EQ + NSE_FO), prefer NSE_EQ then NSE_INDEX.
+        if not sub.empty and "exchange" in sub.columns:
+            order = {"NSE_EQ": 0, "NSE_INDEX": 1, "NSE_FO": 2}
+            sub = sub.assign(_rank=sub["exchange"].astype(str).str.upper().map(order).fillna(9))
+            sub = sub.sort_values(["_rank"]).drop_duplicates(subset=[sym_col]).drop(columns=["_rank"])
     else:
+        inst = universe.nse_equity()
+        sym_col = _pick_symbol_column(inst)
+        key_col = _pick_key_column(inst)
         sub = inst.copy()
         if top > 0:
             sub = sub.head(top)
