@@ -47,11 +47,14 @@ def compute(
     cagr = ((equity.iloc[-1] / equity.iloc[0]) ** (1.0 / years) - 1.0) * 100.0
 
     vol = rets.std() * np.sqrt(periods_per_year) * 100.0
-    mean_ann = rets.mean() * periods_per_year
-    sharpe = float(mean_ann / rets.std() / np.sqrt(periods_per_year) * np.sqrt(periods_per_year)) if rets.std() > 0 else 0.0
+    sharpe = (
+        float(rets.mean() / rets.std() * np.sqrt(periods_per_year))
+        if rets.std() > 0
+        else 0.0
+    )
     downside = rets[rets < 0]
     sortino = (
-        float(mean_ann / downside.std() / np.sqrt(periods_per_year) * np.sqrt(periods_per_year))
+        float(rets.mean() / downside.std() * np.sqrt(periods_per_year))
         if len(downside) > 1 and downside.std() > 0
         else 0.0
     )
